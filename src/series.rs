@@ -135,13 +135,10 @@ where
         Ok(results)
     }
 
-    /* Commented out because I just cannot figure out the type signature
-    pub fn records(&self) -> Result<Map<Iterator<Item=Record<T>>, FnMut(Record<T>) -> Record<T>>, Error> {
-    pub fn records(&self) -> std::result::Result<Map<hash_map::Iter<'_, UniqueId, Record<T>>, Fn(Record<T>) -> Record<T>>, Error> {
-        let results = self.records.iter().map(|tr| tr.1.clone());
+    pub fn records<'s>(&'s self) -> Result<impl Iterator<Item = &'s Record<T>> + 's, Error> {
+        let results = self.records.iter().map(|tr| tr.1);
         Ok(results)
     }
-    */
 
     /*  The point of having Search is so that a lot of internal optimizations can happen once the
      *  data sets start getting large. */
@@ -305,6 +302,27 @@ mod tests {
         }
     }
 
+    #[test]
+    pub fn can_retrieve_entries_iterator() {
+        let _series_remover = SeriesFileCleanup::new("var/can_retrieve_entries_iterator.json");
+        let trips = mk_trips();
+        let mut ts: Series<BikeTrip> = Series::open("var/can_retrieve_entries_iterator.json")
+            .expect("expect the time series to open correctly");
+
+        ts.put(trips[0].clone()).expect("expect a successful put");
+        ts.put(trips[1].clone()).expect("expect a successful put");
+        ts.put(trips[2].clone()).expect("expect a successful put");
+        ts.put(trips[3].clone()).expect("expect a successful put");
+        ts.put(trips[4].clone()).expect("expect a successful put");
+
+        let as_vec = ts.all_records().expect("retrieval is currently infallible");
+        let as_iter = ts.records().expect("retrieval is currently infallible");
+
+        for (from_vec, from_iter) in as_vec.iter().zip(as_iter) {
+            assert_eq!(from_iter.id, from_vec.id);
+            assert_eq!(from_iter.data, from_vec.data);
+        }
+    }
 
     #[test]
     pub fn can_search_for_an_entry_with_exact_time() {
