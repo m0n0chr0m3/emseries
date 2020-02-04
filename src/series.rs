@@ -11,21 +11,21 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, LineWriter};
 
 use criteria::Criteria;
-use types::{Error, Record, Recordable, DeletableRecord, UniqueId, parse_line, write_line};
+use types::{Error, Record, Recordable, DeletableRecord, UniqueId};
 use std::collections::hash_map::Entry;
+use std::convert::TryInto;
 
 /// An open time series database.
 ///
 /// Any given database can store only one data type, T. The data type must be determined when the
 /// database is opened.
 pub struct Series<T: Clone + Recordable + DeserializeOwned + Serialize> {
-    //path: String,
     writer: LineWriter<File>,
     element_for_key: HashMap<UniqueId, T>,
 }
 
 
-impl<'de, T> Series<T>
+impl<T> Series<T>
 where
     T: Clone + Recordable + DeserializeOwned + Serialize,
 {
@@ -44,7 +44,6 @@ where
         let writer = LineWriter::new(f);
 
         Ok(Series {
-            //path: String::from(path),
             writer,
             element_for_key,
         })
@@ -55,25 +54,12 @@ where
         let mut records: HashMap<UniqueId, T> = HashMap::new();
         let reader = BufReader::new(f);
         for line in reader.lines() {
-            match line {
-                Ok(line_) => {
-                    match parse_line(&line_) {
-                        Ok(record) => {
-                            match record.data {
-                                Some(val) => {
-                                    records.insert(
-                                        record.id.clone(),
-                                        val,
-                                    )
-                                }
-                                None => records.remove(&record.id.clone()),
-                            }
-                        }
-                        Err(err) => return Err(err),
-                    };
-                }
-                Err(err) => return Err(Error::IOError(err)),
-            }
+            let line= line.map_err(Error::IOError)?;
+            let record: DeletableRecord<T> = line.as_str().try_into()?;
+            match record.data {
+                Some(val) => records.insert(record.id, val),
+                None => records.remove(&record.id),
+            };
         }
         Ok(records)
     }
@@ -83,11 +69,13 @@ where
     pub fn put(&mut self, entry: T) -> Result<UniqueId, Error> {
         let record = Record::new(entry);
 
-        match self.element_for_key.entry(record.id.clone()) {
+        match self.element_for_key.entry(record.id) {
             Entry::Vacant(ve) => {
                 ve.insert(record.data.clone());
-                write_line(&mut self.writer,
-                           &DeletableRecord { id: record.id.clone(), data: Some(record.data) })?;
+                DeletableRecord {
+                    id: record.id,
+                    data: Some(record.data)
+                }.write_line(&mut self.writer)?;
 
                 Ok(record.id)
             },
@@ -100,14 +88,16 @@ where
     /// Update an existing record. The `UniqueId` of the record passed into this function must match
     /// the `UniqueId` of a record already in the database.
     pub fn update(&mut self, record: Record<T>) -> Result<(), Error> {
-        match self.element_for_key.entry(record.id.clone()) {
+        match self.element_for_key.entry(record.id) {
             Entry::Vacant(_) => {
                 Err(Error::IOError(std::io::Error::from(std::io::ErrorKind::NotFound)))
             },
             Entry::Occupied(mut oe) => {
                 oe.insert(record.data.clone());
-                write_line(&mut self.writer,
-                           &DeletableRecord { id: record.id, data: Some(record.data) })
+                DeletableRecord {
+                    id: record.id,
+                    data: Some(record.data)
+                }.write_line(&mut self.writer)
             }
         }
     }
@@ -122,8 +112,10 @@ where
     /// TODO: Returning deleted item on successful deletion is more-or-less free, but changes API.
     pub fn delete(&mut self, uuid: &UniqueId) -> Result<(), Error> {
         if let Some(_prev_val) = self.element_for_key.remove(uuid) {
-            write_line(&mut self.writer,
-            &DeletableRecord::<T> { id: uuid.clone(), data: None })
+            DeletableRecord::<T> {
+                id: *uuid,
+                data: None
+            }.write_line(&mut self.writer)
         } else {
             Err(Error::IOError(std::io::Error::from(std::io::ErrorKind::NotFound)))
         }
@@ -175,14 +167,8 @@ where
     pub fn get(&self, uuid: &UniqueId) -> Result<Option<Record<T>>, Error> {
         let val = self.element_for_key.get(uuid);
 
-        Ok(val.map(|el| Record { id: uuid.clone(), data: el.clone() }))
+        Ok(val.map(|el| Record { id: *uuid, data: el.clone() }))
     }
-
-    /*
-    pub fn remove(&self, uuid: UniqueId) -> Result<(), Error> {
-        unimplemented!()
-    }
-    */
 }
 
 
@@ -200,6 +186,7 @@ mod tests {
 
     use super::*;
     use criteria::*;
+    use std::str::FromStr;
 
     #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
     struct Distance(Meter<f64>);

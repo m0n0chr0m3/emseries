@@ -11,6 +11,9 @@ use std::fmt;
 use std::io;
 use date_time_tz::DateTimeTz;
 use std::io::Write;
+use std::convert::TryFrom;
+use std::str::FromStr;
+use std::fmt::{Display, Formatter};
 
 
 /// Errors for the database
@@ -52,7 +55,7 @@ impl error::Error for Error {
         }
     }
 
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         match self {
             Error::UUIDParseError(ref err) => Some(err),
             Error::JSONStringError(ref err) => Some(err),
@@ -70,6 +73,7 @@ pub trait Recordable {
     fn timestamp(&self) -> DateTimeTz;
 
     /// A list of string tags that can be used for indexing. This list defined per-type.
+    /// TODO: Perhaps this should return a Set instead of a Vec. What are the use cases?
     fn tags(&self) -> Vec<String>;
 }
 
@@ -86,17 +90,23 @@ impl UniqueId {
         let id = Uuid::new_v4();
         UniqueId(id)
     }
+}
+
+impl Display for UniqueId {
+    /// Displays as a hyphenated string
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", self.0.hyphenated().to_string())
+    }
+}
+
+impl FromStr for UniqueId {
+    type Err = Error;
 
     /// Parse a UUID from a string. Raise UUIDParseError if the parsing fails.
-    pub fn from_str(val: &str) -> Result<UniqueId, Error> {
+    fn from_str(val: &str) -> Result<Self, Self::Err> {
         Uuid::parse_str(val).map(UniqueId).map_err(|err| {
             Error::UUIDParseError(err)
         })
-    }
-
-    /// Convert to a hyphenated string
-    pub fn to_string(&self) -> String {
-        self.0.hyphenated().to_string()
     }
 }
 
@@ -137,27 +147,25 @@ pub struct DeletableRecord<T: Clone + Recordable> {
     pub data: Option<T>,
 }
 
-pub fn parse_line<T>(line: &str) -> Result<DeletableRecord<T>, Error>
-where
-    T: Clone + Recordable + DeserializeOwned + Serialize,
-{
-    serde_json::from_str(&line).map_err(|err| {
-        println!("deserialization error: {}", err);
-        Error::JSONParseError(err)
-    })
+impl<T: Clone + Recordable + DeserializeOwned + Serialize> TryFrom<&str> for DeletableRecord<T> {
+    type Error = Error;
+
+    fn try_from(line: &str) -> Result<Self, Self::Error> {
+        serde_json::from_str(&line).map_err(|err| {
+            println!("deserialization error: {}", err);
+            Error::JSONParseError(err)
+        })
+    }
 }
 
-pub fn write_line<T: Clone + Recordable + Serialize>(
-    mut writer: impl Write,
-    record: &DeletableRecord<T>
-) -> Result<(), Error> {
-    match serde_json::to_string(&record) {
-        Ok(rec_str) => {
-            writer
-                .write_fmt(format_args!("{}\n", rec_str.as_str()))
-                .map_err(Error::IOError)
-        }
-        Err(err) => Err(Error::JSONStringError(err)),
+impl<T: Clone + Recordable + Serialize> DeletableRecord<T> {
+    pub fn write_line(&self, mut writer: impl Write) -> Result<(), Error> {
+        serde_json::to_string(&self)
+            .map_err(Error::JSONStringError)
+            .and_then(|rec_str|
+                writer
+                    .write_fmt(format_args!("{}\n", rec_str.as_str()))
+                    .map_err(Error::IOError))
     }
 }
 
@@ -168,11 +176,13 @@ mod test {
     extern crate serde_json;
 
     use self::dimensioned::si::{Kilogram, KG};
-    use super::{DeletableRecord, Recordable, UniqueId, parse_line};
+    use super::{DeletableRecord, Recordable, UniqueId};
     use date_time_tz::DateTimeTz;
     use chrono::TimeZone;
     use chrono_tz::Etc::UTC;
     use chrono_tz::US::Central;
+    use std::convert::TryInto;
+    use std::str::FromStr;
 
     #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
     pub struct Weight(Kilogram<f64>);
@@ -197,8 +207,9 @@ mod test {
 
     #[test]
     pub fn legacy_deserialization() {
-        let rec: DeletableRecord<WeightRecord> =
-            parse_line(WEIGHT_ENTRY).expect("should successfully parse the record");
+        let rec: DeletableRecord<WeightRecord> = WEIGHT_ENTRY
+            .try_into()
+            .expect("should successfully parse the record");
         assert_eq!(
             rec.id,
             UniqueId::from_str("3330c5b0-783f-4919-b2c4-8169c38f65ff").unwrap()
