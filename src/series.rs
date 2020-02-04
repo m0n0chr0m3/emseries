@@ -8,10 +8,11 @@ use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, LineWriter, Write};
+use std::io::{BufRead, BufReader, LineWriter};
 
 use criteria::Criteria;
-use types::{Error, Record, Recordable, DeletableRecord, UniqueId, parse_line};
+use types::{Error, Record, Recordable, DeletableRecord, UniqueId, parse_line, write_line};
+use std::collections::hash_map::Entry;
 
 /// An open time series database.
 ///
@@ -20,7 +21,7 @@ use types::{Error, Record, Recordable, DeletableRecord, UniqueId, parse_line};
 pub struct Series<T: Clone + Recordable + DeserializeOwned + Serialize> {
     //path: String,
     writer: LineWriter<File>,
-    records: HashMap<UniqueId, Record<T>>,
+    element_for_key: HashMap<UniqueId, T>,
 }
 
 
@@ -38,20 +39,20 @@ where
             .open(&path)
             .map_err(Error::IOError)?;
 
-        let records = Series::load_file(&f)?;
+        let element_for_key = Series::load_file(&f)?;
 
         let writer = LineWriter::new(f);
 
         Ok(Series {
             //path: String::from(path),
             writer,
-            records,
+            element_for_key,
         })
     }
 
     /// Load a file and return all of the records in it.
-    fn load_file(f: &File) -> Result<HashMap<UniqueId, Record<T>>, Error> {
-        let mut records: HashMap<UniqueId, Record<T>> = HashMap::new();
+    fn load_file(f: &File) -> Result<HashMap<UniqueId, T>, Error> {
+        let mut records: HashMap<UniqueId, T> = HashMap::new();
         let reader = BufReader::new(f);
         for line in reader.lines() {
             match line {
@@ -62,10 +63,7 @@ where
                                 Some(val) => {
                                     records.insert(
                                         record.id.clone(),
-                                        Record {
-                                            id: record.id.clone(),
-                                            data: val,
-                                        },
+                                        val,
                                     )
                                 }
                                 None => records.remove(&record.id.clone()),
@@ -84,26 +82,33 @@ where
     /// returned.
     pub fn put(&mut self, entry: T) -> Result<UniqueId, Error> {
         let record = Record::new(entry);
-        let rec_id = record.id.clone();
-        self.update(record).and_then(|()| Ok(rec_id))
+
+        match self.element_for_key.entry(record.id.clone()) {
+            Entry::Vacant(ve) => {
+                ve.insert(record.data.clone());
+                write_line(&mut self.writer,
+                           &DeletableRecord { id: record.id.clone(), data: Some(record.data) })?;
+
+                Ok(record.id)
+            },
+            Entry::Occupied(_) => {
+                Err(Error::IOError(std::io::Error::from(std::io::ErrorKind::AlreadyExists)))
+            }
+        }
     }
 
     /// Update an existing record. The `UniqueId` of the record passed into this function must match
     /// the `UniqueId` of a record already in the database.
     pub fn update(&mut self, record: Record<T>) -> Result<(), Error> {
-        self.records.insert(record.id.clone(), record.clone());
-        let write_res = match serde_json::to_string(&record) {
-            Ok(rec_str) => {
-                self.writer
-                    .write_fmt(format_args!("{}\n", rec_str.as_str()))
-                    .map_err(Error::IOError)
+        match self.element_for_key.entry(record.id.clone()) {
+            Entry::Vacant(_) => {
+                Err(Error::IOError(std::io::Error::from(std::io::ErrorKind::NotFound)))
+            },
+            Entry::Occupied(mut oe) => {
+                oe.insert(record.data.clone());
+                write_line(&mut self.writer,
+                           &DeletableRecord { id: record.id, data: Some(record.data) })
             }
-            Err(err) => Err(Error::JSONStringError(err)),
-        };
-
-        match write_res {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err),
         }
     }
 
@@ -112,32 +117,27 @@ where
     /// Future note: while this deletes a record from the view, it only adds an entry to the
     /// database that indicates `data: null`. If record histories ever become important, the record
     /// and its entire history (including this delete) will still be available.
+    /// TODO: Large overlap between put, update, and delete. Partially caused by the whole
+    /// `Deletablerecord`+`Record` story, whose purpose I don't yet fully understand.
+    /// TODO: Returning deleted item on successful deletion is more-or-less free, but changes API.
     pub fn delete(&mut self, uuid: &UniqueId) -> Result<(), Error> {
-        self.records.remove(uuid);
-
-        let rec: DeletableRecord<T> = DeletableRecord {
-            id: uuid.clone(),
-            data: None,
-        };
-        match serde_json::to_string(&rec) {
-            Ok(rec_str) => {
-                self.writer
-                    .write_fmt(format_args!("{}\n", rec_str.as_str()))
-                    .map_err(Error::IOError)
-            }
-            Err(err) => Err(Error::JSONStringError(err)),
+        if let Some(_prev_val) = self.element_for_key.remove(uuid) {
+            write_line(&mut self.writer,
+            &DeletableRecord::<T> { id: uuid.clone(), data: None })
+        } else {
+            Err(Error::IOError(std::io::Error::from(std::io::ErrorKind::NotFound)))
         }
     }
 
     /// Get all of the records in the database.
+    #[deprecated(note = "Use the `records` method to get an iterator instead")]
     pub fn all_records(&self) -> Result<Vec<Record<T>>, Error> {
-        let results = self.records.iter().map(|tr| tr.1.clone()).collect();
-        Ok(results)
+        self.records().map(|rs| rs.collect())
     }
 
-    pub fn records<'s>(&'s self) -> Result<impl Iterator<Item = &'s Record<T>> + 's, Error> {
-        let results = self.records.iter().map(|tr| tr.1);
-        Ok(results)
+    /// Constructs an iterator over all of the records in the database.
+    pub fn records<'s>(&'s self) -> Result<impl Iterator<Item = Record<T>> + 's, Error> {
+        Ok(self.element_for_key.iter().map(|(&id, el)| Record { id, data: el.clone() }))
     }
 
     /*  The point of having Search is so that a lot of internal optimizations can happen once the
@@ -147,10 +147,10 @@ where
     where
         C: Criteria,
     {
-        let results: Vec<Record<T>> = self.records
+        let results: Vec<Record<T>> = self.element_for_key
             .iter()
             .filter(|&tr| criteria.apply(tr.1))
-            .map(|tr| tr.1.clone())
+            .map(|(&id, el)| Record { id, data: el.clone() })
             .collect();
         Ok(results)
     }
@@ -171,9 +171,11 @@ where
     }
 
     /// Get an exact record from the database based on unique id.
+    // TODO: Figure out why the return type is the way it is. What Err-condition is anticipated?
     pub fn get(&self, uuid: &UniqueId) -> Result<Option<Record<T>>, Error> {
-        let val = self.records.get(uuid);
-        Ok(val.cloned())
+        let val = self.element_for_key.get(uuid);
+
+        Ok(val.map(|el| Record { id: uuid.clone(), data: el.clone() }))
     }
 
     /*

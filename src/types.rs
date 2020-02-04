@@ -10,6 +10,7 @@ use std::error;
 use std::fmt;
 use std::io;
 use date_time_tz::DateTimeTz;
+use std::io::Write;
 
 
 /// Errors for the database
@@ -76,7 +77,7 @@ pub trait Recordable {
 /// Uniquely identifies a record.
 ///
 /// This is a wrapper around a basic uuid with some extra convenience methods.
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
 pub struct UniqueId(Uuid);
 
 impl UniqueId {
@@ -144,6 +145,20 @@ where
         println!("deserialization error: {}", err);
         Error::JSONParseError(err)
     })
+}
+
+pub fn write_line<T: Clone + Recordable + Serialize>(
+    mut writer: impl Write,
+    record: &DeletableRecord<T>
+) -> Result<(), Error> {
+    match serde_json::to_string(&record) {
+        Ok(rec_str) => {
+            writer
+                .write_fmt(format_args!("{}\n", rec_str.as_str()))
+                .map_err(Error::IOError)
+        }
+        Err(err) => Err(Error::JSONStringError(err)),
+    }
 }
 
 
