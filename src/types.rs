@@ -81,7 +81,7 @@ pub trait Recordable {
 /// Uniquely identifies a record.
 ///
 /// This is a wrapper around a basic uuid with some extra convenience methods.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct UniqueId(Uuid);
 
 impl UniqueId {

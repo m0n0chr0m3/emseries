@@ -54,6 +54,7 @@ extern crate serde_derive;
 extern crate chrono;
 extern crate chrono_tz;
 extern crate serde;
+extern crate ahash;
 
 mod criteria;
 mod date_time_tz;
@@ -64,3 +65,4 @@ pub use date_time_tz::DateTimeTz;
 pub use criteria::*;
 pub use series::Series;
 pub use types::{Error, Record, Recordable, UniqueId};
+pub use series::indexing;

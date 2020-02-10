@@ -15,6 +15,13 @@ include = [
     "fixtures/*",
 ]
 
+[lib]
+bench = false
+
+[[bench]]
+name = "bench"
+harness = false
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.4", features = ["serde"] }
@@ -24,3 +31,8 @@ serde_derive = "1"
 serde_json = "1.0"
 uuid = { version = "0.6.5", features = ["v4", "serde"] }
 yaml-rust = "0.4.0"
+ahash = "0.3.2"
+
+[dev-dependencies]
+criterion = "*"
+rand = "*"

@@ -2,9 +2,10 @@ extern crate serde;
 extern crate serde_json;
 extern crate uuid;
 
+pub mod indexing;
+
 use self::serde::de::DeserializeOwned;
 use self::serde::ser::Serialize;
-use std::collections::HashMap;
 use std::cmp::Ordering;
 use std::fs::File;
 use std::fs::OpenOptions;
@@ -14,24 +15,47 @@ use criteria::Criteria;
 use types::{Error, Record, Recordable, DeletableRecord, UniqueId};
 use std::collections::hash_map::Entry;
 use std::convert::TryInto;
+use DateTimeTz;
+use series::indexing::{NoIndex, Indexer};
+use ahash::AHashMap;
 
 /// An open time series database.
 ///
 /// Any given database can store only one data type, T. The data type must be determined when the
 /// database is opened.
-pub struct Series<T: Clone + Recordable + DeserializeOwned + Serialize> {
+pub struct Series<
+    T: Clone + Recordable + DeserializeOwned + Serialize,
+    I: Indexer = NoIndex
+    //I: Indexer = IndexByTime
+> {
     writer: LineWriter<File>,
-    element_for_key: HashMap<UniqueId, T>,
+    element_for_key: AHashMap<UniqueId, T>,
+    indexer: I,
 }
 
 
-impl<T> Series<T>
+impl<T, I> Series<T, I>
 where
     T: Clone + Recordable + DeserializeOwned + Serialize,
+    I: Indexer + Default
 {
-    /// Open a time series database at the specified path. `path` is the full path and filename for
-    /// the database.
-    pub fn open(path: &str) -> Result<Series<T>, Error> {
+    /// Open a time series database at the specified path, with a default-constructed `Indexer`.
+    ///
+    /// `path` is the full path and filename for the database.
+    pub fn open(path: &str) -> Result<Self, Error> {
+        Self::open_with_indexer(path, Default::default())
+    }
+}
+
+impl<T, I> Series<T, I>
+    where
+        T: Clone + Recordable + DeserializeOwned + Serialize,
+        I: Indexer
+{
+    /// Open a time series database at the specified path, with the specified `Indexer`.
+    ///
+    /// `path` is the full path and filename for the database.
+    pub fn open_with_indexer(path: &str, indexer: I) -> Result<Self, Error> {
         let f = OpenOptions::new()
             .read(true)
             .append(true)
@@ -39,19 +63,23 @@ where
             .open(&path)
             .map_err(Error::IOError)?;
 
-        let element_for_key = Series::load_file(&f)?;
+        let mut series = Self {
+            element_for_key: Self::load_file(&f)?,
+            writer: LineWriter::new(f),
+            indexer,
+        };
 
-        let writer = LineWriter::new(f);
+        // Populate the index
+        for (id, data) in &series.element_for_key {
+            series.indexer.insert(id, data);
+        }
 
-        Ok(Series {
-            writer,
-            element_for_key,
-        })
+        Ok(series)
     }
 
     /// Load a file and return all of the records in it.
-    fn load_file(f: &File) -> Result<HashMap<UniqueId, T>, Error> {
-        let mut records: HashMap<UniqueId, T> = HashMap::new();
+    fn load_file(f: &File) -> Result<AHashMap<UniqueId, T>, Error> {
+        let mut records: AHashMap<UniqueId, T> = Default::default();
         let reader = BufReader::new(f);
         for line in reader.lines() {
             let line= line.map_err(Error::IOError)?;
@@ -71,7 +99,13 @@ where
 
         match self.element_for_key.entry(record.id) {
             Entry::Vacant(ve) => {
+                // Insert into main in-memory store
                 ve.insert(record.data.clone());
+
+                // Insert into index
+                self.indexer.insert(&record.id, &record.data);
+
+                // Write to file
                 DeletableRecord {
                     id: record.id,
                     data: Some(record.data)
@@ -93,7 +127,13 @@ where
                 Err(Error::IOError(std::io::Error::from(std::io::ErrorKind::NotFound)))
             },
             Entry::Occupied(mut oe) => {
+                // Update main in-memory store
                 oe.insert(record.data.clone());
+
+                // Update index
+                self.indexer.update(&record.id, oe.get(), &record.data);
+
+                // Write to file
                 DeletableRecord {
                     id: record.id,
                     data: Some(record.data)
@@ -111,7 +151,12 @@ where
     /// `Deletablerecord`+`Record` story, whose purpose I don't yet fully understand.
     /// TODO: Returning deleted item on successful deletion is more-or-less free, but changes API.
     pub fn delete(&mut self, uuid: &UniqueId) -> Result<(), Error> {
-        if let Some(_prev_val) = self.element_for_key.remove(uuid) {
+        // Remove from main in-memory store
+        if let Some(prev_val) = self.element_for_key.remove(uuid) {
+            // Remove from index
+            self.indexer.remove(&uuid, &prev_val);
+
+            // Write to file
             DeletableRecord::<T> {
                 id: *uuid,
                 data: None
@@ -169,6 +214,12 @@ where
 
         Ok(val.map(|el| Record { id: *uuid, data: el.clone() }))
     }
+
+    #[deprecated(note = "Never-stable API to experiment with indexing")]
+    pub fn search_range<'s>(&'s self, range: impl std::ops::RangeBounds<DateTimeTz> + 's)
+                            -> Result<Box<dyn Iterator<Item = (&'s UniqueId, &'s T)> + 's>, Error> {
+        self.indexer.retrieve_range(&self.element_for_key, range)
+    }
 }
 
 
@@ -187,8 +238,9 @@ mod tests {
     use super::*;
     use criteria::*;
     use std::str::FromStr;
+    use series::indexing::{IndexByTime, IndexByAllTags, IndexBySelectedTags};
 
-    #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+    #[derive(Clone, Debug, PartialEq, PartialOrd, Deserialize, Serialize)]
     struct Distance(Meter<f64>);
 
 
@@ -208,7 +260,11 @@ mod tests {
             self.datetime.clone()
         }
         fn tags(&self) -> Vec<String> {
-            Vec::new()
+            let mut tags = Vec::new();
+            if self.distance >= Distance(25_000. * M) {
+                tags.push("Long!".to_owned())
+            }
+            tags
         }
     }
 
@@ -338,12 +394,13 @@ mod tests {
     pub fn can_get_entries_in_time_range() {
         let _series_remover = SeriesFileCleanup::new("var/can_get_entries_in_time_range.json");
         let trips = mk_trips();
-        let mut ts: Series<BikeTrip> = Series::open("var/can_get_entries_in_time_range.json")
+        let mut ts: Series<BikeTrip, IndexByTime> = Series::open("var/can_get_entries_in_time_range.json")
             .expect("expect the time series to open correctly");
         for trip in &trips {
             ts.put(trip.clone()).expect("expect a successful put");
         }
 
+        // Using search_sorted
         match ts.search_sorted(
             time_range(
                 DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0)),
@@ -361,6 +418,80 @@ mod tests {
                 assert_eq!(v[2].data, trips[3]);
             }
         }
+
+        // The same case, this time using search_range
+        match ts.search_range(
+            DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0))
+                ..=
+                DateTimeTz(UTC.ymd(2011, 11, 04).and_hms(0, 0, 0))
+        ) {
+            Err(err) => assert!(false, err),
+            Ok(it) => {
+                let v: Vec<_> = it.collect();
+                assert_eq!(v.len(), 3);
+                assert_eq!(*v[0].1, trips[1]);
+                assert_eq!(*v[1].1, trips[2]);
+                assert_eq!(*v[2].1, trips[3]);
+            }
+        };
+    }
+
+
+    #[test]
+    pub fn can_get_entries_with_specific_tag() {
+        let _series_remover = SeriesFileCleanup::new(
+            "var/can_get_entries_with_specific_tag__no_index.json");
+        let mut ts_noindex: Series<BikeTrip, NoIndex> = Series::open(
+            "var/can_get_entries_with_specific_tag__no_index.json"
+        ).expect("expect the time series to open correctly");
+
+        let _series_remover = SeriesFileCleanup::new(
+            "var/can_get_entries_with_specific_tag__by_time.json");
+        let mut ts_by_time: Series<BikeTrip, IndexByTime> = Series::open(
+            "var/can_get_entries_with_specific_tag__by_time.json"
+        ).expect("expect the time series to open correctly");
+
+        let _series_remover = SeriesFileCleanup::new(
+            "var/can_get_entries_with_specific_tag__by_all_tag.json");
+        let mut ts_by_all_tag: Series<BikeTrip, IndexByAllTags> = Series::open(
+            "var/can_get_entries_with_specific_tag__by_all_tag.json"
+        ).expect("expect the time series to open correctly");
+
+        let _series_remover = SeriesFileCleanup::new(
+            "var/can_get_entries_with_specific_tag__by_some_tag.json");
+        let mut ts_by_some_tag: Series<BikeTrip, IndexBySelectedTags> = Series::open_with_indexer(
+            "var/can_get_entries_with_specific_tag__by_some_tag.json",
+                IndexBySelectedTags::for_tags(vec!["Long!".to_owned()])
+        ).expect("expect the time series to open correctly");
+
+        let trips = mk_trips();
+        for trip in &trips {
+            ts_noindex.put(trip.clone()).expect("expect a successful put");
+            ts_by_time.put(trip.clone()).expect("expect a successful put");
+            ts_by_all_tag.put(trip.clone()).expect("expect a successful put");
+            ts_by_some_tag.put(trip.clone()).expect("expect a successful put");
+        }
+
+        fn check_result<I: Indexer>(trips: &[BikeTrip], series: Series<BikeTrip, I>) {
+            // FIXME: Manually using the indexer methods; bad form!
+            // Need to come up with proper way of checking `Criteria` from `Indexer`s
+            match series.indexer.retrieve_tagged(&series.element_for_key, "Long!") {
+                Err(err) => assert!(false, err),
+                Ok(it) => {
+                    let mut v: Vec<_> = it.collect();
+                    v.sort_unstable_by_key(|t| t.1.timestamp());
+                    assert_eq!(v.len(), 3);
+                    assert_eq!(*v[0].1, trips[0]);
+                    assert_eq!(*v[1].1, trips[2]);
+                    assert_eq!(*v[2].1, trips[3]);
+                }
+            };
+        }
+
+        check_result(&trips, ts_noindex);
+        check_result(&trips, ts_by_time);
+        check_result(&trips, ts_by_all_tag);
+        check_result(&trips, ts_by_some_tag);
     }
 
 
@@ -550,6 +681,40 @@ mod tests {
         }
     }
 
+
+    #[test]
+    pub fn time_index_is_populated_on_load() {
+        let _series_remover = SeriesFileCleanup::new("var/time_index_is_restored_on_load.json");
+        let trips = mk_trips();
+
+        {
+            let mut ts: Series<BikeTrip> = Series::open("var/time_index_is_restored_on_load.json")
+                .expect("expect the time series to open correctly");
+
+            for trip in &trips {
+                ts.put(trip.clone()).expect("expect a successful put");
+            }
+        }
+
+        {
+            let ts: Series<BikeTrip, IndexByTime> = Series::open("var/time_index_is_restored_on_load.json")
+                .expect("expect the time series to open correctly");
+            match ts.search_range(
+                    DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0))
+                        ..=
+                    DateTimeTz(UTC.ymd(2011, 11, 04).and_hms(0, 0, 0))
+            ) {
+                Err(err) => assert!(false, err),
+                Ok(it) => {
+                    let v: Vec<_> = it.collect();
+                    assert_eq!(v.len(), 3);
+                    assert_eq!(*v[0].1, trips[1]);
+                    assert_eq!(*v[1].1, trips[2]);
+                    assert_eq!(*v[2].1, trips[3]);
+                }
+            };
+        }
+    }
 
     #[test]
     pub fn can_delete_an_entry() {
