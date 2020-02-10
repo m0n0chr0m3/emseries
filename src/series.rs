@@ -238,7 +238,7 @@ mod tests {
     use super::*;
     use criteria::*;
     use std::str::FromStr;
-    use series::indexing::{IndexByTime, IndexByAllTags, IndexBySelectedTags};
+    use series::indexing::{IndexByTime, IndexByTags};
 
     #[derive(Clone, Debug, PartialEq, PartialOrd, Deserialize, Serialize)]
     struct Distance(Meter<f64>);
@@ -453,15 +453,15 @@ mod tests {
 
         let _series_remover = SeriesFileCleanup::new(
             "var/can_get_entries_with_specific_tag__by_all_tag.json");
-        let mut ts_by_all_tag: Series<BikeTrip, IndexByAllTags> = Series::open(
+        let mut ts_by_all_tag: Series<BikeTrip, IndexByTags> = Series::open(
             "var/can_get_entries_with_specific_tag__by_all_tag.json"
         ).expect("expect the time series to open correctly");
 
         let _series_remover = SeriesFileCleanup::new(
             "var/can_get_entries_with_specific_tag__by_some_tag.json");
-        let mut ts_by_some_tag: Series<BikeTrip, IndexBySelectedTags> = Series::open_with_indexer(
+        let mut ts_by_some_tag: Series<BikeTrip, IndexByTags> = Series::open_with_indexer(
             "var/can_get_entries_with_specific_tag__by_some_tag.json",
-                IndexBySelectedTags::for_tags(vec!["Long!".to_owned()])
+            IndexByTags::for_tags(vec!["Long!".to_owned()])
         ).expect("expect the time series to open correctly");
 
         let trips = mk_trips();

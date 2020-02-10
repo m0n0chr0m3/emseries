@@ -47,11 +47,8 @@ pub trait Indexer {
 mod index_by_time;
 pub use self::index_by_time::IndexByTime;
 
-mod index_by_all_tags;
-pub use self::index_by_all_tags::IndexByAllTags;
-
-mod index_selected_tags;
-pub use self::index_selected_tags::IndexBySelectedTags;
+mod index_by_tags;
+pub use self::index_by_tags::IndexByTags;
 
 #[derive(Default)]
 pub struct NoIndex;

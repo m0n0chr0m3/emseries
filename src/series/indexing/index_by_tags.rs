@@ -7,16 +7,22 @@ use serde::Serialize;
 use ::{DateTimeTz, Recordable};
 use std::ops::RangeBounds;
 
-// TODO: Is it worth maintaining a separate type for this, or would it be better to add a
-// configuration option to IndexBySelectedTags which determines whether empty buckets are ignored
-// or created?
-
-#[derive(Default)]
-pub struct IndexByAllTags {
+pub struct IndexByTags {
     ids_by_tag: HashMap<Box<str>, Vec<UniqueId>>,
+    may_make_new_buckets: bool,
 }
 
-impl Indexer for IndexByAllTags {
+impl Default for IndexByTags {
+    /// Creates a new `IndexByTags` which indexes all elements by all its tags.
+    fn default() -> Self {
+        IndexByTags {
+            ids_by_tag: HashMap::new(),
+            may_make_new_buckets: true,
+        }
+    }
+}
+
+impl Indexer for IndexByTags {
     fn insert(&mut self, id: &UniqueId, recordable: &impl Recordable) {
         for tag in recordable.tags() {
             self.insert_raw(id, tag.into_boxed_str())
@@ -65,12 +71,34 @@ impl Indexer for IndexByAllTags {
     }
 }
 
-impl IndexByAllTags {
+impl IndexByTags {
+    /// Creates a new `IndexByTags` which indexes elements by the specified `tags`.
+    pub fn for_tags(tags: Vec<String>) -> Self {
+        IndexByTags {
+            ids_by_tag: tags.into_iter()
+                .map(|tag| (tag.into_boxed_str(), Vec::new()))
+                .collect(),
+            may_make_new_buckets: false,
+        }
+    }
+
     /// Insert UniqueId into tag-index
     fn insert_raw(&mut self, id: &UniqueId, tag: Box<str>) {
-        let new_bucket = self.ids_by_tag
-            .entry(tag)
-            .or_default();
+        let new_bucket = if self.may_make_new_buckets {
+            // Retrieve existing bucket, or create fresh one
+            self.ids_by_tag
+                .entry(tag)
+                .or_default()
+        } else {
+            if let Some(bucket) = self.ids_by_tag.get_mut(tag.as_ref()) {
+                // Retrieve existing bucket
+                bucket
+            } else {
+                // This tag is not indexed by this `IndexByTags`, nothing left to do
+                return;
+            }
+        };
+
         let idx = new_bucket.binary_search(id).unwrap_or_else(|i|i);
         new_bucket.insert(idx, *id);
     }

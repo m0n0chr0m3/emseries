@@ -11,8 +11,7 @@ use series::indexing::NoIndex;
 
 #[derive(Default)]
 pub struct IndexByTime {
-    // FIXME: Not `pub`, but `pub` during a code migration...
-    pub ids_by_time: BTreeMap<DateTimeTz, Vec<UniqueId>>,
+    ids_by_time: BTreeMap<DateTimeTz, Vec<UniqueId>>,
 }
 
 impl Indexer for IndexByTime {
