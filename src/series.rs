@@ -11,7 +11,7 @@ use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, LineWriter, Write};
 
 use criteria::Criteria;
-use types::{DeletableRecord, Error, Record, Recordable, UniqueId};
+use types::{DeletableRecord, Error, Recordable, UniqueId};
 
 /// An open time series database.
 ///
@@ -20,7 +20,7 @@ use types::{DeletableRecord, Error, Record, Recordable, UniqueId};
 pub struct Series<T: Clone + Recordable + DeserializeOwned + Serialize> {
     //path: String,
     writer: LineWriter<File>,
-    records: HashMap<UniqueId, Record<T>>,
+    records: HashMap<UniqueId, T>,
 }
 
 impl<T> Series<T>
@@ -49,8 +49,8 @@ where
     }
 
     /// Load a file and return all of the records in it.
-    fn load_file(f: &File) -> Result<HashMap<UniqueId, Record<T>>, Error> {
-        let mut records: HashMap<UniqueId, Record<T>> = HashMap::new();
+    fn load_file(f: &File) -> Result<HashMap<UniqueId, T>, Error> {
+        let mut records: HashMap<UniqueId, T> = HashMap::new();
         let reader = BufReader::new(f);
         for line in reader.lines() {
             match line {
@@ -59,10 +59,7 @@ where
                         Ok(record) => match record.data {
                             Some(val) => records.insert(
                                 record.id.clone(),
-                                Record {
-                                    id: record.id.clone(),
-                                    data: val,
-                                },
+                                 val,
                             ),
                             None => records.remove(&record.id.clone()),
                         },
@@ -78,26 +75,37 @@ where
     /// Put a new record into the database. A unique id will be assigned to the record and
     /// returned.
     pub fn put(&mut self, entry: T) -> Result<UniqueId, Error> {
-        let record = Record::new(entry);
-        let rec_id = record.id.clone();
-        self.update(record).and_then(|()| Ok(rec_id))
+        let id = UniqueId::new();
+        self.update(&id, entry)?;
+        Ok(id)
     }
 
-    /// Update an existing record. The `UniqueId` of the record passed into this function must match
-    /// the `UniqueId` of a record already in the database.
-    pub fn update(&mut self, record: Record<T>) -> Result<(), Error> {
-        self.records.insert(record.id.clone(), record.clone());
-        let write_res = match serde_json::to_string(&record) {
+    /// Update the record assigned to an existing id.
+    /// The `UniqueId` of the record passed into this function must match the `UniqueId` of a
+    /// record already in the database.
+    // TODO: Returning the previous `T` that was registered for `uuid` is practically 'free' in
+    // case of a real update (i.e., if `uuid` was already known to the `Series`). Return previous?
+    // (Note that this would require a change to `Series::put`, since it currently abuses `update`
+    // to insert data for a uuid where no previous value existed for.
+    pub fn update(&mut self, uuid: &UniqueId, entry: T) -> Result<(), Error> {
+        let record = DeletableRecord { id: uuid.clone(), data: Some(entry) };
+        match serde_json::to_string(&record) {
             Ok(rec_str) => self
                 .writer
                 .write_fmt(format_args!("{}\n", rec_str.as_str()))
                 .map_err(Error::IOError),
             Err(err) => Err(Error::JSONStringError(err)),
-        };
+        }?;
 
-        match write_res {
-            Ok(_) => Ok(()),
-            Err(err) => Err(err),
+        // There's no reason to clone the in-memory representations of `uuid` and `entry`: we know
+        // we put them in the `DeletableRecord` and never handed out mutable references to it.
+        // Retrieve `id` and `entry` by destructuring the `DeletableRecord`:
+        if let DeletableRecord { id, data: Some(entry) } = record {
+            self.records.insert(id, entry);
+
+            Ok(())
+        } else {
+            unreachable!("`DeletableRecord` will contain what we just put in.")
         }
     }
 
@@ -109,9 +117,9 @@ where
     pub fn delete(&mut self, uuid: &UniqueId) -> Result<(), Error> {
         self.records.remove(uuid);
 
-        let rec: DeletableRecord<T> = DeletableRecord {
+        let rec = DeletableRecord {
             id: uuid.clone(),
-            data: None,
+            data: None::<T>,
         };
         match serde_json::to_string(&rec) {
             Ok(rec_str) => self
@@ -122,41 +130,36 @@ where
         }
     }
 
-    /// Get all of the records in the database.
-    pub fn all_records(&self) -> Result<Vec<Record<T>>, Error> {
-        let results = self.records.iter().map(|tr| tr.1.clone()).collect();
-        Ok(results)
-    }
-
-    pub fn records<'s>(&'s self) -> Result<impl Iterator<Item = &'s Record<T>> + 's, Error> {
-        Ok(self.records.values())
+    /// Retrieve an iterator over all of the records in the database.
+    pub fn records<'s>(&'s self) -> Result<impl Iterator<Item=(&'s UniqueId, &'s T)> + 's, Error> {
+        Ok(self.records.iter())
     }
 
     /*  The point of having Search is so that a lot of internal optimizations can happen once the
      *  data sets start getting large. */
     /// Perform a search on the records in a database, based on the given criteria.
-    pub fn search<C>(&self, criteria: C) -> Result<Vec<Record<T>>, Error>
+    pub fn search<C>(&self, criteria: C) -> Result<impl Iterator<Item = (&UniqueId, &T)>, Error>
     where
         C: Criteria,
     {
-        let results: Vec<Record<T>> = self
-            .records
-            .iter()
-            .filter(|&tr| criteria.apply(tr.1))
-            .map(|tr| tr.1.clone())
-            .collect();
-        Ok(results)
+        Ok(self.records()?
+            .filter(move |tr| criteria.apply(tr.1)))
     }
 
     /// Perform a search and sort the resulting records based on the comparison.
-    pub fn search_sorted<C, CMP>(&self, criteria: C, compare: CMP) -> Result<Vec<Record<T>>, Error>
+    pub fn search_sorted<C, CMP>(
+        &self,
+        criteria: C,
+        mut compare: CMP
+    ) -> Result<Vec<(&UniqueId, &T)>, Error>
     where
         C: Criteria,
-        CMP: FnMut(&Record<T>, &Record<T>) -> Ordering,
+        CMP: FnMut(&T, &T) -> Ordering,
     {
         match self.search(criteria) {
-            Ok(mut records) => {
-                records.sort_by(compare);
+            Ok(records) => {
+                let mut records: Vec<_> = records.collect();
+                records.sort_unstable_by(move |l, r| compare(l.1, r.1));
                 Ok(records)
             }
             Err(err) => Err(err),
@@ -164,9 +167,8 @@ where
     }
 
     /// Get an exact record from the database based on unique id.
-    pub fn get(&self, uuid: &UniqueId) -> Result<Option<Record<T>>, Error> {
-        let val = self.records.get(uuid);
-        Ok(val.cloned())
+    pub fn get(&self, uuid: &UniqueId) -> Result<Option<T>, Error> {
+        Ok(self.records.get(uuid).cloned())
     }
 
     /*
@@ -275,36 +277,14 @@ mod tests {
                 Err(err) => assert!(false, err),
                 Ok(None) => assert!(false, "There should have been a value here"),
                 Ok(Some(tr)) => {
-                    assert_eq!(tr.id, uuid);
                     assert_eq!(
                         tr.timestamp(),
                         DateTimeTz(UTC.ymd(2011, 10, 29).and_hms(0, 0, 0))
                     );
-                    assert_eq!(tr.data.duration, Duration(11040.0 * S));
-                    assert_eq!(tr.data.comments, String::from("long time ago"));
-                    assert_eq!(tr.data, trips[0]);
+                    assert_eq!(tr.duration, Duration(11040.0 * S));
+                    assert_eq!(tr.comments, String::from("long time ago"));
+                    assert_eq!(tr, trips[0]);
                 }
-            }
-        })
-    }
-
-    #[test]
-    pub fn can_retrieve_entries_iterator() {
-        run_test(|path| {
-            let trips = mk_trips();
-            let mut ts: Series<BikeTrip> = Series::open(&path.to_string_lossy())
-                .expect("expect the time series to open correctly");
-
-            for trip in &trips[0..=4] {
-                ts.put(trip.clone()).expect("expect a successful put");
-            }
-
-            let as_vec = ts.all_records().expect("retrieval is currently infallible");
-            let as_iter = ts.records().expect("retrieval is currently infallible");
-
-            for (from_vec, from_iter) in as_vec.iter().zip(as_iter) {
-                assert_eq!(from_iter.id, from_vec.id);
-                assert_eq!(from_iter.data, from_vec.data);
             }
         })
     }
@@ -324,11 +304,12 @@ mod tests {
                 UTC.ymd(2011, 10, 31).and_hms(0, 0, 0),
             ))) {
                 Err(err) => assert!(false, err),
-                Ok(v) => {
+                Ok(i) => {
+                    let v: Vec<_> = i.collect();
                     assert_eq!(v.len(), 1);
-                    assert_eq!(v[0].data, trips[1]);
+                    assert_eq!(*v[0].1, trips[1]);
                 }
-            }
+            };
         })
     }
 
@@ -355,9 +336,9 @@ mod tests {
                 Err(err) => assert!(false, err),
                 Ok(v) => {
                     assert_eq!(v.len(), 3);
-                    assert_eq!(v[0].data, trips[1]);
-                    assert_eq!(v[1].data, trips[2]);
-                    assert_eq!(v[2].data, trips[3]);
+                    assert_eq!(*v[0].1, trips[1]);
+                    assert_eq!(*v[1].1, trips[2]);
+                    assert_eq!(*v[2].1, trips[3]);
                 }
             }
         })
@@ -392,9 +373,9 @@ mod tests {
                     Err(err) => assert!(false, err),
                     Ok(v) => {
                         assert_eq!(v.len(), 3);
-                        assert_eq!(v[0].data, trips[1]);
-                        assert_eq!(v[1].data, trips[2]);
-                        assert_eq!(v[2].data, trips[3]);
+                        assert_eq!(*v[0].1, trips[1]);
+                        assert_eq!(*v[1].1, trips[2]);
+                        assert_eq!(*v[2].1, trips[3]);
                     }
                 }
             }
@@ -430,8 +411,8 @@ mod tests {
                     Err(err) => assert!(false, err),
                     Ok(v) => {
                         assert_eq!(v.len(), 2);
-                        assert_eq!(v[0].data, trips[1]);
-                        assert_eq!(v[1].data, trips[2]);
+                        assert_eq!(*v[0].1, trips[1]);
+                        assert_eq!(*v[1].1, trips[2]);
                         ts.put(trips[3].clone()).expect("expect a successful put");
                         ts.put(trips[4].clone()).expect("expect a successful put");
                     }
@@ -453,10 +434,10 @@ mod tests {
                     Err(err) => assert!(false, err),
                     Ok(v) => {
                         assert_eq!(v.len(), 4);
-                        assert_eq!(v[0].data, trips[1]);
-                        assert_eq!(v[1].data, trips[2]);
-                        assert_eq!(v[2].data, trips[3]);
-                        assert_eq!(v[3].data, trips[4]);
+                        assert_eq!(*v[0].1, trips[1]);
+                        assert_eq!(*v[1].1, trips[2]);
+                        assert_eq!(*v[2].1, trips[3]);
+                        assert_eq!(*v[3].1, trips[4]);
                     }
                 }
             }
@@ -479,8 +460,8 @@ mod tests {
                 Err(err) => assert!(false, err),
                 Ok(None) => assert!(false, "record not found"),
                 Ok(Some(mut trip)) => {
-                    trip.data.distance = Distance(50000.0 * M);
-                    ts.update(trip).expect("expect record to update");
+                    trip.distance = Distance(50000.0 * M);
+                    ts.update(&trip_id, trip).expect("expect record to update");
                 }
             };
 
@@ -489,12 +470,12 @@ mod tests {
                 Ok(None) => assert!(false, "record not found"),
                 Ok(Some(trip)) => {
                     assert_eq!(
-                        trip.data.datetime,
+                        trip.datetime,
                         DateTimeTz(UTC.ymd(2011, 11, 02).and_hms(0, 0, 0))
                     );
-                    assert_eq!(trip.data.distance, Distance(50000.0 * M));
-                    assert_eq!(trip.data.duration, Duration(7020.0 * S));
-                    assert_eq!(trip.data.comments, String::from("Do Some Distance!"));
+                    assert_eq!(trip.distance, Distance(50000.0 * M));
+                    assert_eq!(trip.duration, Duration(7020.0 * S));
+                    assert_eq!(trip.comments, String::from("Do Some Distance!"));
                 }
             }
         })
@@ -517,8 +498,8 @@ mod tests {
                     Err(err) => assert!(false, err),
                     Ok(None) => assert!(false, "record not found"),
                     Ok(Some(mut trip)) => {
-                        trip.data.distance = Distance(50000.0 * M);
-                        ts.update(trip).expect("expect record to update");
+                        trip.distance = Distance(50000.0 * M);
+                        ts.update(&trip_id, trip).expect("expect record to update");
                     }
                 };
             }
@@ -527,9 +508,9 @@ mod tests {
                 let ts: Series<BikeTrip> = Series::open(&path.to_string_lossy())
                     .expect("expect the time series to open correctly");
 
-                match ts.all_records() {
+                match ts.records() {
                     Err(err) => assert!(false, err),
-                    Ok(trips) => assert_eq!(trips.len(), 3),
+                    Ok(trips) => assert_eq!(trips.count(), 3),
                 }
 
                 match ts.search(exact_time(DateTimeTz(
@@ -537,16 +518,17 @@ mod tests {
                 ))) {
                     Err(err) => assert!(false, err),
                     Ok(trips) => {
+                        let trips: Vec<_> = trips.collect();
                         assert_eq!(trips.len(), 1);
                         assert_eq!(
-                            trips[0].data.datetime,
+                            trips[0].1.datetime,
                             DateTimeTz(UTC.ymd(2011, 11, 02).and_hms(0, 0, 0))
                         );
-                        assert_eq!(trips[0].data.distance, Distance(50000.0 * M));
-                        assert_eq!(trips[0].data.duration, Duration(7020.0 * S));
-                        assert_eq!(trips[0].data.comments, String::from("Do Some Distance!"));
+                        assert_eq!(trips[0].1.distance, Distance(50000.0 * M));
+                        assert_eq!(trips[0].1.duration, Duration(7020.0 * S));
+                        assert_eq!(trips[0].1.comments, String::from("Do Some Distance!"));
                     }
-                }
+                };
             }
         })
     }
@@ -565,15 +547,15 @@ mod tests {
 
                 ts.delete(&trip_id).expect("successful delete");
 
-                let recs = ts.all_records().expect("good record retrieval");
-                assert_eq!(recs.len(), 2);
+                let recs = ts.records().expect("good record retrieval");
+                assert_eq!(recs.count(), 2);
             }
 
             {
                 let ts: Series<BikeTrip> = Series::open(&path.to_string_lossy())
                     .expect("expect the time series to open correctly");
-                let recs = ts.all_records().expect("good record retrieval");
-                assert_eq!(recs.len(), 2);
+                let recs = ts.records().expect("good record retrieval");
+                assert_eq!(recs.count(), 2);
             }
         })
     }
@@ -609,7 +591,7 @@ mod tests {
         match rec {
             Err(err) => assert!(false, err),
             Ok(None) => assert!(false, "no record found"),
-            Ok(Some(rec)) => assert_eq!(rec.data.weight, Weight(77.79109 * KG)),
+            Ok(Some(rec)) => assert_eq!(rec.weight, Weight(77.79109 * KG)),
         }
     }
 }

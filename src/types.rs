@@ -106,36 +106,6 @@ impl fmt::Display for UniqueId {
     }
 }
 
-/// Every record contains a unique ID and then the primary data, which itself must implementd the
-/// Recordable trait.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Record<T: Clone + Recordable> {
-    pub id: UniqueId,
-    pub data: T,
-}
-
-impl<T> Record<T>
-where
-    T: Clone + Recordable,
-{
-    pub fn new(data: T) -> Record<T> {
-        let id = UniqueId::new();
-        Record { id, data }
-    }
-}
-
-impl<T> Recordable for Record<T>
-where
-    T: Clone + Recordable,
-{
-    fn timestamp(&self) -> DateTimeTz {
-        self.data.timestamp()
-    }
-    fn tags(&self) -> Vec<String> {
-        self.data.tags()
-    }
-}
-
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct DeletableRecord<T: Clone + Recordable> {

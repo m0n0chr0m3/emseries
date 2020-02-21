@@ -63,4 +63,4 @@ mod types;
 pub use date_time_tz::DateTimeTz;
 pub use criteria::*;
 pub use series::Series;
-pub use types::{Error, Record, Recordable, UniqueId};
+pub use types::{Error, Recordable, UniqueId};
