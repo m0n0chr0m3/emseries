@@ -6,12 +6,11 @@ extern crate uuid;
 use self::serde::de::DeserializeOwned;
 use self::serde::ser::Serialize;
 use self::uuid::Uuid;
+use crate::date_time_tz::DateTimeTz;
 use std::error;
 use std::fmt;
 use std::io;
 use std::str;
-use date_time_tz::DateTimeTz;
-
 
 /// Errors for the database
 #[derive(Debug)]
@@ -29,7 +28,6 @@ pub enum Error {
     IOError(io::Error),
 }
 
-
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -41,17 +39,7 @@ impl fmt::Display for Error {
     }
 }
 
-
 impl error::Error for Error {
-    fn description(&self) -> &str {
-        match self {
-            Error::UUIDParseError(ref err) => err.description(),
-            Error::JSONStringError(ref err) => err.description(),
-            Error::JSONParseError(ref err) => err.description(),
-            Error::IOError(ref err) => err.description(),
-        }
-    }
-
     fn cause(&self) -> Option<&dyn error::Error> {
         match self {
             Error::UUIDParseError(ref err) => Some(err),
@@ -62,7 +50,6 @@ impl error::Error for Error {
     }
 }
 
-
 /// Any element to be put into the database needs to be Recordable. This is the common API that
 /// will aid in searching and later in indexing records.
 pub trait Recordable {
@@ -72,7 +59,6 @@ pub trait Recordable {
     /// A list of string tags that can be used for indexing. This list defined per-type.
     fn tags(&self) -> Vec<String>;
 }
-
 
 /// Uniquely identifies a record.
 ///
@@ -93,9 +79,9 @@ impl str::FromStr for UniqueId {
 
     /// Parse a UniqueId from a string. Raise UUIDParseError if the parsing fails.
     fn from_str(val: &str) -> Result<Self, Self::Err> {
-        Uuid::parse_str(val).map(UniqueId).map_err(|err| {
-            Error::UUIDParseError(err)
-        })
+        Uuid::parse_str(val)
+            .map(UniqueId)
+            .map_err(|err| Error::UUIDParseError(err))
     }
 }
 
@@ -136,7 +122,6 @@ where
     }
 }
 
-
 #[derive(Clone, Deserialize, Serialize)]
 pub struct DeletableRecord<T: Clone + Recordable> {
     pub id: UniqueId,
@@ -157,7 +142,6 @@ where
     }
 }
 
-
 #[cfg(test)]
 mod test {
     extern crate dimensioned;
@@ -165,7 +149,7 @@ mod test {
 
     use self::dimensioned::si::{Kilogram, KG};
     use super::{DeletableRecord, Recordable};
-    use date_time_tz::DateTimeTz;
+    use crate::date_time_tz::DateTimeTz;
     use chrono::TimeZone;
     use chrono_tz::Etc::UTC;
     use chrono_tz::US::Central;
@@ -193,8 +177,9 @@ mod test {
 
     #[test]
     pub fn legacy_deserialization() {
-        let rec: DeletableRecord<WeightRecord> =
-            WEIGHT_ENTRY.parse().expect("should successfully parse the record");
+        let rec: DeletableRecord<WeightRecord> = WEIGHT_ENTRY
+            .parse()
+            .expect("should successfully parse the record");
         assert_eq!(
             rec.id,
             "3330c5b0-783f-4919-b2c4-8169c38f65ff".parse().unwrap()
@@ -202,7 +187,7 @@ mod test {
         assert_eq!(
             rec.data,
             Some(WeightRecord {
-                date: DateTimeTz(UTC.ymd(2003, 11, 10).and_hms(6, 0, 0)),
+                date: DateTimeTz(UTC.with_ymd_and_hms(2003, 11, 10, 6, 0, 0).unwrap()),
                 weight: Weight(77.79109 * KG),
             })
         );
@@ -211,7 +196,7 @@ mod test {
     #[test]
     pub fn serialization_output() {
         let rec = WeightRecord {
-            date: DateTimeTz(UTC.ymd(2003, 11, 10).and_hms(6, 0, 0)),
+            date: DateTimeTz(UTC.with_ymd_and_hms(2003, 11, 10, 6, 0, 0).unwrap()),
             weight: Weight(77.0 * KG),
         };
         assert_eq!(
@@ -220,7 +205,7 @@ mod test {
         );
 
         let rec2 = WeightRecord {
-            date: DateTimeTz(Central.ymd(2003, 11, 10).and_hms(0, 0, 0)),
+            date: DateTimeTz(Central.with_ymd_and_hms(2003, 11, 10, 0, 0, 0).unwrap()),
             weight: Weight(77.0 * KG),
         };
         assert_eq!(

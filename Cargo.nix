@@ -82,7 +82,7 @@ rec {
     serde = "1.0.70";
     parse_zoneinfo = "0.1.1";
   };
-  deps.dimensioned."0.7.0" = {
+  deps.dimensioned."0.8.0" = {
     generic_array = "0.11.1";
     num_traits = "0.2.5";
     serde = "1.0.70";
@@ -92,7 +92,7 @@ rec {
   deps.emseries."0.4.0" = {
     chrono = "0.4.4";
     chrono_tz = "0.4.1";
-    dimensioned = "0.7.0";
+    dimensioned = "0.8.0";
     serde = "1.0.70";
     serde_derive = "1.0.76";
     serde_json = "1.0.24";

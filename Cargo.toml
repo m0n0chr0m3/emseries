@@ -8,6 +8,7 @@ documentation = "https://docs.rs/emseries"
 homepage = "https://github.com/luminescent-dreams/emseries"
 repository = "https://github.com/luminescent-dreams/emseries"
 categories = ["database-implementations"]
+edition = "2021"
 
 include = [
     "**/*.rs",
@@ -18,7 +19,7 @@ include = [
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.4", features = ["serde"] }
-dimensioned = { version = "0.7.0", features = ["serde"] }
+dimensioned = { version = "0.8.0", features = ["serde"] }
 serde = "1"
 serde_derive = "1"
 serde_json = "1.0"

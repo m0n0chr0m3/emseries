@@ -3,7 +3,7 @@ bitflags-1.0.3
 cfg-if-0.1.4
 chrono-0.4.4
 chrono-tz-0.4.1
-dimensioned-0.7.0
+dimensioned-0.8.0
 dtoa-0.4.3
 fuchsia-zircon-0.3.3
 fuchsia-zircon-sys-0.3.3

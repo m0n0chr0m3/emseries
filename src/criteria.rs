@@ -1,5 +1,5 @@
-use date_time_tz::DateTimeTz;
-use types::Recordable;
+use crate::date_time_tz::DateTimeTz;
+use crate::types::Recordable;
 
 /// This trait is used for constructing queries for searching the database.
 pub trait Criteria {
@@ -8,13 +8,11 @@ pub trait Criteria {
     fn apply<T: Recordable>(&self, record: &T) -> bool;
 }
 
-
 /// Specify two criteria that must both be matched.
 pub struct And<A: Criteria, B: Criteria> {
     pub lside: A,
     pub rside: B,
 }
-
 
 impl<A, B> Criteria for And<A, B>
 where
@@ -26,13 +24,11 @@ where
     }
 }
 
-
 /// Specify two criteria, either of which may be matched.
 pub struct Or<A: Criteria, B: Criteria> {
     pub lside: A,
     pub rside: B,
 }
-
 
 /// Specify the starting time for a search. This consists of a UTC timestamp and a specifier as to
 /// whether the exact time is included in the search criteria.
@@ -40,7 +36,6 @@ pub struct StartTime {
     pub time: DateTimeTz,
     pub incl: bool,
 }
-
 
 impl Criteria for StartTime {
     fn apply<T: Recordable>(&self, record: &T) -> bool {
@@ -52,14 +47,12 @@ impl Criteria for StartTime {
     }
 }
 
-
 /// Specify the ending time for a search. This consists of a UTC timestamp and a specifier as to
 /// whether the exact time is included in the search criteria.
 pub struct EndTime {
     pub time: DateTimeTz,
     pub incl: bool,
 }
-
 
 impl Criteria for EndTime {
     fn apply<T: Recordable>(&self, record: &T) -> bool {
@@ -71,7 +64,6 @@ impl Criteria for EndTime {
     }
 }
 
-
 /// Specify a list of tags that must exist on the record.
 pub struct Tags {
     pub tags: Vec<String>,
@@ -80,12 +72,9 @@ pub struct Tags {
 impl Criteria for Tags {
     fn apply<T: Recordable>(&self, record: &T) -> bool {
         let record_tags = record.tags();
-        self.tags
-            .iter()
-            .all(|v| record_tags.contains(v))
+        self.tags.iter().all(|v| record_tags.contains(v))
     }
 }
-
 
 /// Specify a criteria that searches for records matching an exact time.
 pub fn exact_time(time: DateTimeTz) -> And<StartTime, EndTime> {
@@ -97,7 +86,6 @@ pub fn exact_time(time: DateTimeTz) -> And<StartTime, EndTime> {
         rside: EndTime { time, incl: true },
     }
 }
-
 
 /// Specify a criteria that searches for all records within a time range.
 pub fn time_range(

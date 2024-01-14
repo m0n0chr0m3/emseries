@@ -35,10 +35,9 @@ impl DateTimeTz {
         } else {
             format!(
                 "{} {}",
-                self.0.with_timezone(&chrono_tz::Etc::UTC).to_rfc3339_opts(
-                    SecondsFormat::Secs,
-                    true,
-                ),
+                self.0
+                    .with_timezone(&chrono_tz::Etc::UTC)
+                    .to_rfc3339_opts(SecondsFormat::Secs, true,),
                 self.0.timezone().name()
             )
         }
@@ -65,9 +64,9 @@ impl<'de> Visitor<'de> for DateTimeTzVisitor {
     }
 
     fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-        DateTimeTz::from_str(s).or(Err(E::custom(
-            format!("string is not a parsable datetime representation"),
-        )))
+        DateTimeTz::from_str(s).or(Err(E::custom(format!(
+            "string is not a parsable datetime representation"
+        ))))
     }
 }
 
@@ -87,36 +86,51 @@ impl<'de> Deserialize<'de> for DateTimeTz {
 mod test {
     extern crate serde_json;
 
+    use crate::date_time_tz::DateTimeTz;
     use chrono::TimeZone;
-    use chrono_tz::Etc::UTC;
     use chrono_tz::America::Phoenix;
+    use chrono_tz::Etc::UTC;
     use chrono_tz::US::{Arizona, Central};
-    use date_time_tz::DateTimeTz;
 
     #[test]
     fn it_creates_timestamp_with_z() {
-        let t = DateTimeTz(UTC.ymd(2019, 5, 15).and_hms(12, 0, 0));
+        let t = DateTimeTz(UTC.with_ymd_and_hms(2019, 5, 15, 12, 0, 0).unwrap());
         assert_eq!(t.to_string(), "2019-05-15T12:00:00Z");
     }
 
     #[test]
     fn it_parses_utc_rfc3339_z() {
         let t = DateTimeTz::from_str("2019-05-15T12:00:00Z").unwrap();
-        assert_eq!(t, DateTimeTz(UTC.ymd(2019, 5, 15).and_hms(12, 0, 0)));
+        assert_eq!(
+            t,
+            DateTimeTz(UTC.with_ymd_and_hms(2019, 5, 15, 12, 0, 0).unwrap())
+        );
     }
 
     #[test]
     fn it_parses_rfc3339_with_offset() {
         let t = DateTimeTz::from_str("2019-05-15T12:00:00-06:00").unwrap();
-        assert_eq!(t, DateTimeTz(UTC.ymd(2019, 5, 15).and_hms(18, 0, 0)));
+        assert_eq!(
+            t,
+            DateTimeTz(UTC.with_ymd_and_hms(2019, 5, 15, 18, 0, 0).unwrap())
+        );
     }
 
     #[test]
     fn it_parses_rfc3339_with_tz() {
         let t = DateTimeTz::from_str("2019-06-15T19:00:00Z US/Arizona").unwrap();
-        assert_eq!(t, DateTimeTz(UTC.ymd(2019, 6, 15).and_hms(19, 0, 0)));
-        assert_eq!(t, DateTimeTz(Arizona.ymd(2019, 6, 15).and_hms(12, 0, 0)));
-        assert_eq!(t, DateTimeTz(Central.ymd(2019, 6, 15).and_hms(14, 0, 0)));
+        assert_eq!(
+            t,
+            DateTimeTz(UTC.with_ymd_and_hms(2019, 6, 15, 19, 0, 0).unwrap())
+        );
+        assert_eq!(
+            t,
+            DateTimeTz(Arizona.with_ymd_and_hms(2019, 6, 15, 12, 0, 0).unwrap())
+        );
+        assert_eq!(
+            t,
+            DateTimeTz(Central.with_ymd_and_hms(2019, 6, 15, 14, 0, 0).unwrap())
+        );
         assert_eq!(t.to_string(), "2019-06-15T19:00:00Z US/Arizona");
     }
 
@@ -148,8 +162,11 @@ mod test {
 
     #[test]
     fn it_json_parses() {
-        let t = serde_json::from_str::<DateTimeTz>("\"2019-06-15T19:00:00Z America/Phoenix\"")
-            .unwrap();
-        assert_eq!(t, DateTimeTz(Phoenix.ymd(2019, 6, 15).and_hms(12, 0, 0)));
+        let t =
+            serde_json::from_str::<DateTimeTz>("\"2019-06-15T19:00:00Z America/Phoenix\"").unwrap();
+        assert_eq!(
+            t,
+            DateTimeTz(Phoenix.with_ymd_and_hms(2019, 6, 15, 12, 0, 0).unwrap())
+        );
     }
 }

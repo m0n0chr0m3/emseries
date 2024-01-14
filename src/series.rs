@@ -10,8 +10,8 @@ use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, LineWriter, Write};
 
-use criteria::Criteria;
-use types::{DeletableRecord, Error, Record, Recordable, UniqueId};
+use crate::criteria::Criteria;
+use crate::types::{DeletableRecord, Error, Record, Recordable, UniqueId};
 
 /// An open time series database.
 ///
@@ -183,13 +183,11 @@ mod tests {
 
     use self::chrono::prelude::*;
     use self::dimensioned::si::{Kilogram, Meter, Second, KG, M, S};
+    use crate::date_time_tz::DateTimeTz;
     use chrono_tz::Etc::UTC;
-    use date_time_tz::DateTimeTz;
-    use std::fs;
-    use std::ops;
 
     use super::*;
-    use criteria::*;
+    use crate::criteria::*;
 
     #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
     struct Distance(Meter<f64>);
@@ -217,31 +215,31 @@ mod tests {
     fn mk_trips() -> [BikeTrip; 5] {
         [
             BikeTrip {
-                datetime: DateTimeTz(UTC.ymd(2011, 10, 29).and_hms(0, 0, 0)),
+                datetime: DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 29, 0, 0, 0).unwrap()),
                 distance: Distance(58741.055 * M),
                 duration: Duration(11040.0 * S),
                 comments: String::from("long time ago"),
             },
             BikeTrip {
-                datetime: DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0)),
+                datetime: DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 31, 0, 0, 0).unwrap()),
                 distance: Distance(17702.0 * M),
                 duration: Duration(2880.0 * S),
                 comments: String::from("day 2"),
             },
             BikeTrip {
-                datetime: DateTimeTz(UTC.ymd(2011, 11, 02).and_hms(0, 0, 0)),
+                datetime: DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 02, 0, 0, 0).unwrap()),
                 distance: Distance(41842.945 * M),
                 duration: Duration(7020.0 * S),
                 comments: String::from("Do Some Distance!"),
             },
             BikeTrip {
-                datetime: DateTimeTz(UTC.ymd(2011, 11, 04).and_hms(0, 0, 0)),
+                datetime: DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 04, 0, 0, 0).unwrap()),
                 distance: Distance(34600.895 * M),
                 duration: Duration(5580.0 * S),
                 comments: String::from("I did a lot of distance back then"),
             },
             BikeTrip {
-                datetime: DateTimeTz(UTC.ymd(2011, 11, 05).and_hms(0, 0, 0)),
+                datetime: DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 05, 0, 0, 0).unwrap()),
                 distance: Distance(6437.376 * M),
                 duration: Duration(960.0 * S),
                 comments: String::from("day 5"),
@@ -272,13 +270,13 @@ mod tests {
             }
 
             match record_res {
-                Err(err) => assert!(false, err),
+                Err(err) => assert!(false, "{}", err),
                 Ok(None) => assert!(false, "There should have been a value here"),
                 Ok(Some(tr)) => {
                     assert_eq!(tr.id, uuid);
                     assert_eq!(
                         tr.timestamp(),
-                        DateTimeTz(UTC.ymd(2011, 10, 29).and_hms(0, 0, 0))
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 29, 0, 0, 0).unwrap())
                     );
                     assert_eq!(tr.data.duration, Duration(11040.0 * S));
                     assert_eq!(tr.data.comments, String::from("long time ago"));
@@ -321,9 +319,9 @@ mod tests {
             }
 
             match ts.search(exact_time(DateTimeTz(
-                UTC.ymd(2011, 10, 31).and_hms(0, 0, 0),
+                UTC.with_ymd_and_hms(2011, 10, 31, 0, 0, 0).unwrap(),
             ))) {
-                Err(err) => assert!(false, err),
+                Err(err) => assert!(false, "{}", err),
                 Ok(v) => {
                     assert_eq!(v.len(), 1);
                     assert_eq!(v[0].data, trips[1]);
@@ -345,14 +343,14 @@ mod tests {
 
             match ts.search_sorted(
                 time_range(
-                    DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0)),
+                    DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 31, 0, 0, 0).unwrap()),
                     true,
-                    DateTimeTz(UTC.ymd(2011, 11, 04).and_hms(0, 0, 0)),
+                    DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 04, 0, 0, 0).unwrap()),
                     true,
                 ),
                 |l, r| l.timestamp().cmp(&r.timestamp()),
             ) {
-                Err(err) => assert!(false, err),
+                Err(err) => assert!(false, "{}", err),
                 Ok(v) => {
                     assert_eq!(v.len(), 3);
                     assert_eq!(v[0].data, trips[1]);
@@ -382,14 +380,14 @@ mod tests {
                     .expect("expect the time series to open correctly");
                 match ts.search_sorted(
                     time_range(
-                        DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0)),
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 31, 0, 0, 0).unwrap()),
                         true,
-                        DateTimeTz(UTC.ymd(2011, 11, 04).and_hms(0, 0, 0)),
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 04, 0, 0, 0).unwrap()),
                         true,
                     ),
                     |l, r| l.timestamp().cmp(&r.timestamp()),
                 ) {
-                    Err(err) => assert!(false, err),
+                    Err(err) => assert!(false, "{}", err),
                     Ok(v) => {
                         assert_eq!(v.len(), 3);
                         assert_eq!(v[0].data, trips[1]);
@@ -420,14 +418,14 @@ mod tests {
                     .expect("expect the time series to open correctly");
                 match ts.search_sorted(
                     time_range(
-                        DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0)),
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 31, 0, 0, 0).unwrap()),
                         true,
-                        DateTimeTz(UTC.ymd(2011, 11, 04).and_hms(0, 0, 0)),
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 04, 0, 0, 0).unwrap()),
                         true,
                     ),
                     |l, r| l.timestamp().cmp(&r.timestamp()),
                 ) {
-                    Err(err) => assert!(false, err),
+                    Err(err) => assert!(false, "{}", err),
                     Ok(v) => {
                         assert_eq!(v.len(), 2);
                         assert_eq!(v[0].data, trips[1]);
@@ -443,14 +441,14 @@ mod tests {
                     .expect("expect the time series to open correctly");
                 match ts.search_sorted(
                     time_range(
-                        DateTimeTz(UTC.ymd(2011, 10, 31).and_hms(0, 0, 0)),
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 10, 31, 0, 0, 0).unwrap()),
                         true,
-                        DateTimeTz(UTC.ymd(2011, 11, 05).and_hms(0, 0, 0)),
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 05, 0, 0, 0).unwrap()),
                         true,
                     ),
                     |l, r| l.timestamp().cmp(&r.timestamp()),
                 ) {
-                    Err(err) => assert!(false, err),
+                    Err(err) => assert!(false, "{}", err),
                     Ok(v) => {
                         assert_eq!(v.len(), 4);
                         assert_eq!(v[0].data, trips[1]);
@@ -476,7 +474,7 @@ mod tests {
             let trip_id = ts.put(trips[2].clone()).expect("expect a successful put");
 
             match ts.get(&trip_id) {
-                Err(err) => assert!(false, err),
+                Err(err) => assert!(false, "{}", err),
                 Ok(None) => assert!(false, "record not found"),
                 Ok(Some(mut trip)) => {
                     trip.data.distance = Distance(50000.0 * M);
@@ -485,12 +483,12 @@ mod tests {
             };
 
             match ts.get(&trip_id) {
-                Err(err) => assert!(false, err),
+                Err(err) => assert!(false, "{}", err),
                 Ok(None) => assert!(false, "record not found"),
                 Ok(Some(trip)) => {
                     assert_eq!(
                         trip.data.datetime,
-                        DateTimeTz(UTC.ymd(2011, 11, 02).and_hms(0, 0, 0))
+                        DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 02, 0, 0, 0).unwrap())
                     );
                     assert_eq!(trip.data.distance, Distance(50000.0 * M));
                     assert_eq!(trip.data.duration, Duration(7020.0 * S));
@@ -514,7 +512,7 @@ mod tests {
                 let trip_id = ts.put(trips[2].clone()).expect("expect a successful put");
 
                 match ts.get(&trip_id) {
-                    Err(err) => assert!(false, err),
+                    Err(err) => assert!(false, "{}", err),
                     Ok(None) => assert!(false, "record not found"),
                     Ok(Some(mut trip)) => {
                         trip.data.distance = Distance(50000.0 * M);
@@ -528,19 +526,19 @@ mod tests {
                     .expect("expect the time series to open correctly");
 
                 match ts.all_records() {
-                    Err(err) => assert!(false, err),
+                    Err(err) => assert!(false, "{}", err),
                     Ok(trips) => assert_eq!(trips.len(), 3),
                 }
 
                 match ts.search(exact_time(DateTimeTz(
-                    UTC.ymd(2011, 11, 02).and_hms(0, 0, 0),
+                    UTC.with_ymd_and_hms(2011, 11, 02, 0, 0, 0).unwrap(),
                 ))) {
-                    Err(err) => assert!(false, err),
+                    Err(err) => assert!(false, "{}", err),
                     Ok(trips) => {
                         assert_eq!(trips.len(), 1);
                         assert_eq!(
                             trips[0].data.datetime,
-                            DateTimeTz(UTC.ymd(2011, 11, 02).and_hms(0, 0, 0))
+                            DateTimeTz(UTC.with_ymd_and_hms(2011, 11, 02, 0, 0, 0).unwrap())
                         );
                         assert_eq!(trips[0].data.distance, Distance(50000.0 * M));
                         assert_eq!(trips[0].data.duration, Duration(7020.0 * S));
@@ -607,7 +605,7 @@ mod tests {
             .expect("something is wrong with this ID");
         let rec = ts.get(&uid);
         match rec {
-            Err(err) => assert!(false, err),
+            Err(err) => assert!(false, "{}", err),
             Ok(None) => assert!(false, "no record found"),
             Ok(Some(rec)) => assert_eq!(rec.data.weight, Weight(77.79109 * KG)),
         }
